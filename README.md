@@ -1,6 +1,10 @@
 # webnovel2kindle
 
+![webnovel2kindle logo](logo.png)
+
 CLI experimental para ler a pagina de uma obra na Central Novel, reconhecer volumes e capitulos, selecionar um volume e gerar um EPUB.
+
+A imagem `logo.png` na raiz do projeto tambem e usada como logo discreta na assinatura dos EPUBs gerados.
 
 ## Stack
 

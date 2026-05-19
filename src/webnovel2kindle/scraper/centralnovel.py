@@ -125,17 +125,41 @@ def _extract_description(soup: BeautifulSoup) -> str | None:
         return None
 
     paragraphs: list[str] = []
-    for node in content.find_all(["p", "div"], recursive=False):
+    for node in content.find_all(["p", "div", "hr"], recursive=False):
+        if node.name == "hr":
+            break
+
         text = _clean_text(node.get_text(" ", strip=True))
         if not text:
             continue
-        if text.upper() == "AVISO":
+        if _is_description_stop_text(text):
             break
-        if text.startswith("Este conteúdo foi traduzido"):
-            break
+
+        if text.lower().startswith("sinopse:"):
+            text = _clean_text(text.split(":", 1)[1])
+            if not text:
+                continue
+
         paragraphs.append(text)
 
     return "\n\n".join(paragraphs) or None
+
+
+def _is_description_stop_text(text: str) -> bool:
+    normalized = text.casefold()
+    stop_prefixes = (
+        "aviso",
+        "este conteúdo foi traduzido",
+        "este conteudo foi traduzido",
+        "se você possui os direitos legais",
+        "se voce possui os direitos legais",
+        "para outros assuntos",
+        "confira outras músicas",
+        "confira outras musicas",
+        "se curtiu",
+        "download",
+    )
+    return any(normalized.startswith(prefix) for prefix in stop_prefixes)
 
 
 def _extract_cover_url(soup: BeautifulSoup, page_url: str) -> str | None:

@@ -61,8 +61,10 @@ def test_parse_novel_page_uses_centralnovel_eplister_blocks() -> None:
         <div class="genxed">Fantasia</div>
         <div class="entry-content">
           <p>Crescendo na pobreza, Sunny nunca esperou nada de bom da vida.</p>
-          <p>AVISO</p>
-          <p>Este conteúdo foi traduzido automaticamente.</p>
+          <div>AVISO Este conteúdo foi traduzido automaticamente.</div>
+          <hr />
+          <p>Se você possui os direitos legais sobre a obra...</p>
+          <p>Confira outras músicas de Shadow Slave.</p>
         </div>
         <div class="eplister">
           <a href="https://centralnovel.com/shadow-slave-capitulo-4/">

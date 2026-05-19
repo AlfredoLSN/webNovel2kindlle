@@ -12,6 +12,8 @@ from pathlib import Path
 from webnovel2kindle.models import ChapterContent, Novel, Volume
 
 GENERATOR_NAME = "webnovel2kindle"
+TOOL_LOGO_PATH = Path(__file__).resolve().parents[2] / "logo.png"
+TOOL_LOGO_HREF = "images/tool-logo.png"
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,7 @@ def build_epub(
     chapters: list[ChapterContent],
     output_path: Path,
     cover: CoverImage | None = None,
+    tool_logo_path: Path | None = TOOL_LOGO_PATH,
 ) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -34,6 +37,7 @@ def build_epub(
     modified = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     chapter_files = [f"chapters/chapter-{index:04d}.xhtml" for index in range(1, len(chapters) + 1)]
     cover_href = f"images/cover{cover.extension}" if cover else None
+    tool_logo = _read_tool_logo(tool_logo_path)
 
     with zipfile.ZipFile(output_path, "w") as epub:
         epub.writestr(
@@ -45,22 +49,39 @@ def build_epub(
         _write(epub, "OEBPS/styles/book.css", _book_css())
         _write(epub, "OEBPS/title.xhtml", _title_page(novel, volume, cover_href))
         _write(epub, "OEBPS/metadata.xhtml", _metadata_page(novel))
-        _write(epub, "OEBPS/signature.xhtml", _signature_page(novel))
+        _write(epub, "OEBPS/signature.xhtml", _signature_page(has_logo=tool_logo is not None))
         _write(epub, "OEBPS/nav.xhtml", _nav_page(novel, volume, chapters, chapter_files))
         _write(epub, "OEBPS/toc.ncx", _toc_ncx(book_id, novel, volume, chapters, chapter_files))
         _write(
             epub,
             "OEBPS/content.opf",
-            _content_opf(book_id, modified, novel, volume, chapters, chapter_files, cover),
+            _content_opf(
+                book_id,
+                modified,
+                novel,
+                volume,
+                chapters,
+                chapter_files,
+                cover,
+                has_tool_logo=tool_logo is not None,
+            ),
         )
 
         if cover and cover_href:
             epub.writestr(f"OEBPS/{cover_href}", cover.data, compress_type=zipfile.ZIP_DEFLATED)
+        if tool_logo:
+            epub.writestr(f"OEBPS/{TOOL_LOGO_HREF}", tool_logo, compress_type=zipfile.ZIP_DEFLATED)
 
         for chapter, file_name in zip(chapters, chapter_files, strict=True):
             _write(epub, f"OEBPS/{file_name}", _chapter_page(chapter))
 
     return output_path
+
+
+def _read_tool_logo(tool_logo_path: Path | None) -> bytes | None:
+    if not tool_logo_path or not tool_logo_path.exists():
+        return None
+    return tool_logo_path.read_bytes()
 
 
 def cover_from_response(data: bytes, content_type: str | None, source_url: str) -> CoverImage:
@@ -103,6 +124,7 @@ def _content_opf(
     chapters: list[ChapterContent],
     chapter_files: list[str],
     cover: CoverImage | None,
+    has_tool_logo: bool,
 ) -> str:
     metadata = novel.metadata
     subject_tags = "\n".join(
@@ -118,6 +140,11 @@ def _content_opf(
             f'media-type="{cover.media_type}" properties="cover-image"/>\n'
         )
         cover_meta = '    <meta name="cover" content="cover-image"/>\n'
+    tool_logo_item = (
+        f'    <item id="tool-logo" href="{TOOL_LOGO_HREF}" media-type="image/png"/>\n'
+        if has_tool_logo
+        else ""
+    )
 
     chapter_items = "\n".join(
         f'    <item id="chapter-{index:04d}" href="{file_name}" '
@@ -151,11 +178,12 @@ def _content_opf(
     <item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>
     <item id="metadata" href="metadata.xhtml" media-type="application/xhtml+xml"/>
     <item id="signature" href="signature.xhtml" media-type="application/xhtml+xml"/>
-{cover_item}{chapter_items}
+{cover_item}{tool_logo_item}{chapter_items}
   </manifest>
   <spine toc="toc">
     <itemref idref="title"/>
     <itemref idref="metadata"/>
+    <itemref idref="nav"/>
 {chapter_spine}
     <itemref idref="signature"/>
   </spine>
@@ -216,14 +244,18 @@ def _metadata_page(novel: Novel) -> str:
     )
 
 
-def _signature_page(novel: Novel) -> str:
+def _signature_page(has_logo: bool) -> str:
+    logo = (
+        f'<img class="tool-logo" src="{TOOL_LOGO_HREF}" alt="{GENERATOR_NAME}"/>'
+        if has_logo
+        else ""
+    )
     return _xhtml(
         "Assinatura",
         f"""
         <section class="signature">
-          <h1>Assinatura da edição</h1>
-          <p>Este EPUB foi estruturado e gerado com {GENERATOR_NAME}.</p>
-          <p>Fonte original: {escape(novel.url)}</p>
+          {logo}
+          <p>Gerado com {GENERATOR_NAME}.</p>
         </section>
         """,
     )
@@ -255,9 +287,10 @@ def _nav_page(
     return _xhtml(
         "Sumario",
         f"""
-        <nav epub:type="toc" id="toc">
-          <h1>{escape(novel.title)} - {escape(volume.title)}</h1>
-          <ol>
+        <nav class="book-toc" epub:type="toc" id="toc">
+          <h1>Sumário</h1>
+          <p>{escape(novel.title)} - {escape(volume.title)}</p>
+          <ol class="toc-list">
             <li><a href="title.xhtml">Capa</a></li>
             <li><a href="metadata.xhtml">Sobre esta edição</a></li>
             {chapter_items}
@@ -379,10 +412,42 @@ th, td {
   text-align: center;
 }
 
+.book-toc p {
+  text-align: left;
+  text-indent: 0;
+}
+
+.toc-list {
+  line-height: 1.4;
+  margin: 1.5em 0 0;
+  padding-left: 1.5em;
+}
+
+.toc-list li {
+  margin: 0.45em 0;
+}
+
+.toc-list a {
+  text-decoration: none;
+}
+
 .signature {
   border-top: 1px solid #d8d8d8;
   margin-top: 4em;
   padding-top: 2em;
+  text-align: center;
+}
+
+.signature p {
+  text-align: center;
+  text-indent: 0;
+}
+
+.tool-logo {
+  display: block;
+  margin: 0 auto 1em;
+  max-height: 96px;
+  max-width: 240px;
 }
 """
 
