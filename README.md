@@ -1,6 +1,6 @@
 # webnovel2kindle
 
-CLI experimental para ler a pagina de uma obra na Central Novel, reconhecer volumes e capitulos, e exibir a estrutura encontrada.
+CLI experimental para ler a pagina de uma obra na Central Novel, reconhecer volumes e capitulos, selecionar um volume e gerar um EPUB.
 
 ## Stack
 
@@ -13,11 +13,27 @@ CLI experimental para ler a pagina de uma obra na Central Novel, reconhecer volu
 
 ## Uso
 
+Fluxo completo guiado:
+
 ```bash
-uv run webnovel2kindle scan
+uv run webnovel2kindle
 ```
 
-Ou passando a URL diretamente:
+A CLI vai pedir o link da obra, exibir os volumes, pedir o volume desejado, baixar os capitulos e gerar o EPUB em `dist/`.
+
+Fluxo completo ja com link:
+
+```bash
+uv run webnovel2kindle --url https://centralnovel.com/series/shadow-slave-20230928/
+```
+
+Fluxo completo ja com link e volume:
+
+```bash
+uv run webnovel2kindle --url https://centralnovel.com/series/shadow-slave-20230928/ --volume 2
+```
+
+Para apenas ver a estrutura:
 
 ```bash
 uv run webnovel2kindle scan https://centralnovel.com/series/shadow-slave-20230928/
@@ -27,6 +43,18 @@ Para listar todos os capitulos, use:
 
 ```bash
 uv run webnovel2kindle scan https://centralnovel.com/series/shadow-slave-20230928/ --chapters
+```
+
+Tambem existe o comando explicito de exportacao:
+
+```bash
+uv run webnovel2kindle export https://centralnovel.com/series/shadow-slave-20230928/
+```
+
+Ou informe o volume diretamente:
+
+```bash
+uv run webnovel2kindle export https://centralnovel.com/series/shadow-slave-20230928/ --volume 2
 ```
 
 ## Testes

@@ -14,6 +14,14 @@ class HttpClient:
     timeout: float = 30.0
 
     def get_html(self, url: str) -> str:
+        response = self._get(url)
+        return response.text
+
+    def get_bytes(self, url: str) -> tuple[bytes, str | None]:
+        response = self._get(url)
+        return response.content, response.headers.get("content-type")
+
+    def _get(self, url: str) -> httpx.Response:
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -32,4 +40,4 @@ class HttpClient:
         except httpx.HTTPError as exc:
             raise FetchError(f"Nao consegui buscar a pagina: {exc}") from exc
 
-        return response.text
+        return response

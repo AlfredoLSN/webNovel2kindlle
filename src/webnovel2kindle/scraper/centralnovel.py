@@ -5,7 +5,7 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
-from webnovel2kindle.models import Chapter, Novel, Volume
+from webnovel2kindle.models import Chapter, ChapterContent, Novel, NovelMetadata, Volume
 
 CHAPTER_RE = re.compile(r"\b(?:chapter|capitulo|capítulo|cap\.?|ch\.?)\s*(\d+)\b", re.IGNORECASE)
 VOL_CAP_RE = re.compile(
@@ -18,14 +18,48 @@ VOLUME_RE = re.compile(r"\b(?:volume|vol\.?|book|arc|season)\b", re.IGNORECASE)
 def parse_novel_page(html: str, page_url: str) -> Novel:
     soup = BeautifulSoup(html, "html.parser")
     title = _extract_title(soup)
+    metadata = _extract_metadata(soup, page_url)
     centralnovel_volumes = _extract_eplister_volumes(soup, page_url)
     if centralnovel_volumes:
-        return Novel(title=title, url=page_url, volumes=tuple(centralnovel_volumes))
+        return Novel(
+            title=title,
+            url=page_url,
+            volumes=tuple(centralnovel_volumes),
+            metadata=metadata,
+        )
 
     chapters = _extract_chapter_links(soup, page_url)
     volumes = _group_chapters_by_volume(soup, chapters)
 
-    return Novel(title=title, url=page_url, volumes=tuple(volumes))
+    return Novel(title=title, url=page_url, volumes=tuple(volumes), metadata=metadata)
+
+
+def parse_chapter_page(html: str) -> ChapterContent:
+    soup = BeautifulSoup(html, "html.parser")
+    title = _extract_title(soup)
+    content = soup.select_one(".epcontent") or soup.select_one(".entry-content")
+    if not content:
+        return ChapterContent(title=title, html="<p>Conteudo nao encontrado.</p>")
+
+    for unwanted in content.select("script, style, iframe, ins, .code-block, .sharedaddy"):
+        unwanted.decompose()
+
+    paragraphs = []
+    for child in content.find_all(["p", "h2", "h3", "blockquote"], recursive=False):
+        text = _clean_text(child.get_text(" ", strip=True))
+        if text:
+            tag = child.name if child.name in {"h2", "h3", "blockquote"} else "p"
+            paragraphs.append(f"<{tag}>{_escape_xml(text)}</{tag}>")
+
+    if not paragraphs:
+        text = content.get_text("\n", strip=True)
+        paragraphs = [
+            f"<p>{_escape_xml(line)}</p>"
+            for line in text.splitlines()
+            if _clean_text(line)
+        ]
+
+    return ChapterContent(title=title, html="\n".join(paragraphs))
 
 
 def _extract_eplister_volumes(soup: BeautifulSoup, page_url: str) -> list[Volume]:
@@ -57,6 +91,81 @@ def _extract_eplister_volumes(soup: BeautifulSoup, page_url: str) -> list[Volume
         for volume_title, chapters in volumes.items()
     ]
     return sorted(parsed, key=_volume_sort_key)
+
+
+def _extract_metadata(soup: BeautifulSoup, page_url: str) -> NovelMetadata:
+    fields = _extract_info_fields(soup)
+    return NovelMetadata(
+        author=fields.get("Autor"),
+        status=fields.get("Status"),
+        novel_type=fields.get("Tipo"),
+        release_year=fields.get("Lançamento") or fields.get("Lancamento"),
+        posted_at=fields.get("Postado em"),
+        updated_at=fields.get("Atualizado em"),
+        description=_extract_description(soup),
+        cover_url=_extract_cover_url(soup, page_url),
+        genres=tuple(_extract_genres(soup)),
+    )
+
+
+def _extract_info_fields(soup: BeautifulSoup) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for node in soup.select(".spe span"):
+        text = _clean_text(node.get_text(" ", strip=True))
+        if ":" not in text:
+            continue
+        key, value = text.split(":", 1)
+        fields[_clean_text(key)] = _clean_text(value.strip(" ,"))
+    return fields
+
+
+def _extract_description(soup: BeautifulSoup) -> str | None:
+    content = soup.select_one(".entry-content")
+    if not content:
+        return None
+
+    paragraphs: list[str] = []
+    for node in content.find_all(["p", "div"], recursive=False):
+        text = _clean_text(node.get_text(" ", strip=True))
+        if not text:
+            continue
+        if text.upper() == "AVISO":
+            break
+        if text.startswith("Este conteúdo foi traduzido"):
+            break
+        paragraphs.append(text)
+
+    return "\n\n".join(paragraphs) or None
+
+
+def _extract_cover_url(soup: BeautifulSoup, page_url: str) -> str | None:
+    selectors = [
+        "img.ts-post-image",
+        "img.wp-post-image",
+        'meta[property="og:image"]',
+        ".bigcover img",
+    ]
+    for selector in selectors:
+        node = soup.select_one(selector)
+        if not node:
+            continue
+        value = (
+            node.get("content")
+            if node.name == "meta"
+            else node.get("src") or node.get("data-src")
+        )
+        if value:
+            return urljoin(page_url, value)
+    return None
+
+
+def _extract_genres(soup: BeautifulSoup) -> list[str]:
+    genres: list[str] = []
+    for node in soup.select(".genxed, .mgen a, .seriestugenre a"):
+        text = _clean_text(node.get_text(" ", strip=True))
+        if text and text not in genres:
+            genres.append(text)
+    return genres
 
 
 def _extract_title(soup: BeautifulSoup) -> str:
@@ -249,3 +358,12 @@ def _volume_sort_key(volume: Volume) -> tuple[int, int]:
 
 def _clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _escape_xml(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )

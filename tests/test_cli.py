@@ -10,3 +10,10 @@ def test_scan_rejects_non_centralnovel_url() -> None:
 
     assert result.exit_code != 0
     assert "Central Novel" in result.output
+
+
+def test_default_flow_rejects_non_centralnovel_url() -> None:
+    result = runner.invoke(app, ["--url", "https://example.com/novel"])
+
+    assert result.exit_code != 0
+    assert "Central Novel" in result.output
