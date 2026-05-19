@@ -109,6 +109,7 @@ def test_parse_chapter_page_extracts_clean_xhtml_paragraphs() -> None:
     <html>
       <body>
         <h1 class="entry-title">Shadow Slave - Capítulo 1</h1>
+        <div class="cat-series">O Pesadelo Começa</div>
         <div class="epcontent">
           <p>Traduzido usando o ChatGPT</p>
           <p>Um jovem & uma xícara de café.</p>
@@ -120,6 +121,6 @@ def test_parse_chapter_page_extracts_clean_xhtml_paragraphs() -> None:
 
     chapter = parse_chapter_page(html)
 
-    assert chapter.title == "Shadow Slave - Capítulo 1"
+    assert chapter.title == "Capítulo 1 - O Pesadelo Começa"
     assert "<script>" not in chapter.html
     assert "<p>Um jovem &amp; uma xícara de café.</p>" in chapter.html

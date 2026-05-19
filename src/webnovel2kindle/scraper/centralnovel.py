@@ -36,7 +36,7 @@ def parse_novel_page(html: str, page_url: str) -> Novel:
 
 def parse_chapter_page(html: str) -> ChapterContent:
     soup = BeautifulSoup(html, "html.parser")
-    title = _extract_title(soup)
+    title = _extract_chapter_title(soup)
     content = soup.select_one(".epcontent") or soup.select_one(".entry-content")
     if not content:
         return ChapterContent(title=title, html="<p>Conteudo nao encontrado.</p>")
@@ -60,6 +60,23 @@ def parse_chapter_page(html: str) -> ChapterContent:
         ]
 
     return ChapterContent(title=title, html="\n".join(paragraphs))
+
+
+def _extract_chapter_title(soup: BeautifulSoup) -> str:
+    page_title = _extract_title(soup)
+    chapter_name_node = soup.select_one(".cat-series")
+    if not chapter_name_node:
+        return page_title
+
+    chapter_name = _clean_text(chapter_name_node.get_text(" ", strip=True))
+    if not chapter_name or chapter_name.casefold() in page_title.casefold():
+        return page_title
+
+    chapter_number = _chapter_number(page_title)
+    if chapter_number is not None:
+        return f"Capítulo {chapter_number} - {chapter_name}"
+
+    return f"{page_title} - {chapter_name}"
 
 
 def _extract_eplister_volumes(soup: BeautifulSoup, page_url: str) -> list[Volume]:
