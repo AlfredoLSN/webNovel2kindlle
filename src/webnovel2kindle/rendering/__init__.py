@@ -1,0 +1,1 @@
+"""Renderizacao no terminal."""
