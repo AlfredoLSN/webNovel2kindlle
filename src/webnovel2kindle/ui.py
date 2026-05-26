@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import threading
+import uuid
 import webbrowser
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,6 +21,11 @@ LOGO_PATH = Path(__file__).resolve().parents[2] / "logo.png"
 
 class WebNovelServer(ThreadingHTTPServer):
     daemon_threads = True
+
+    def __init__(self, server_address: tuple[str, int], handler_class: type[UiHandler]) -> None:
+        super().__init__(server_address, handler_class)
+        self.jobs: dict[str, ExportJob] = {}
+        self.jobs_lock = threading.Lock()
 
 
 class UiHandler(BaseHTTPRequestHandler):
@@ -38,6 +45,7 @@ class UiHandler(BaseHTTPRequestHandler):
         routes = {
             "/api/scan": self._scan,
             "/api/export": self._export,
+            "/api/progress": self._progress,
         }
         handler = routes.get(urlparse(self.path).path)
         if handler is None:
@@ -92,38 +100,34 @@ class UiHandler(BaseHTTPRequestHandler):
         volume_index = _payload_volume(payload)
         output_dir = _payload_output_dir(payload)
 
-        client = HttpClient()
-        novel = _fetch_novel(url, client=client)
-        if not novel.volumes:
-            raise UiError("Nenhum volume encontrado nessa obra.")
-        if volume_index < 1 or volume_index > len(novel.volumes):
-            raise UiError(f"Volume invalido. Escolha de 1 a {len(novel.volumes)}.")
+        job = ExportJob(id=uuid.uuid4().hex)
+        server = self._app_server()
+        with server.jobs_lock:
+            server.jobs[job.id] = job
 
-        volume = novel.volumes[volume_index - 1]
-        chapters = []
-        try:
-            for chapter in volume.chapters:
-                chapter_html = client.get_html(chapter.url)
-                chapters.append(parse_chapter_page(chapter_html))
-        except FetchError as exc:
-            raise UiError(str(exc), HTTPStatus.BAD_GATEWAY) from exc
+        thread = threading.Thread(
+            target=_run_export_job,
+            args=(job, url, volume_index, output_dir),
+            daemon=True,
+        )
+        thread.start()
+        return {"job_id": job.id}
 
-        cover = None
-        if novel.metadata.cover_url:
-            try:
-                cover_data, content_type = client.get_bytes(novel.metadata.cover_url)
-                cover = cover_from_response(cover_data, content_type, novel.metadata.cover_url)
-            except FetchError:
-                cover = None
+    def _progress(self, payload: dict[str, object]) -> dict[str, object]:
+        job_id = _payload_job_id(payload)
+        server = self._app_server()
+        with server.jobs_lock:
+            job = server.jobs.get(job_id)
 
-        output_path = output_dir / epub_file_name(novel, volume)
-        build_epub(novel, volume, chapters, output_path, cover)
-        return {
-            "message": "EPUB gerado com sucesso.",
-            "path": str(output_path),
-            "title": f"{novel.title} - {volume.title}",
-            "chapter_count": len(chapters),
-        }
+        if job is None:
+            raise UiError("Exportacao nao encontrada.", HTTPStatus.NOT_FOUND)
+
+        return job.snapshot()
+
+    def _app_server(self) -> WebNovelServer:
+        if not isinstance(self.server, WebNovelServer):
+            raise UiError("Servidor da interface indisponivel.", HTTPStatus.INTERNAL_SERVER_ERROR)
+        return self.server
 
     def _read_json(self) -> dict[str, object]:
         length = int(self.headers.get("content-length", "0"))
@@ -157,6 +161,122 @@ class UiHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+@dataclass
+class ExportJob:
+    id: str
+    status: str = "running"
+    stage: str = "queued"
+    message: str = "Preparando exportacao..."
+    current: int = 0
+    total: int = 0
+    current_title: str = ""
+    output_path: str | None = None
+    book_title: str | None = None
+    error: str | None = None
+
+    def snapshot(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "status": self.status,
+            "stage": self.stage,
+            "message": self.message,
+            "current": self.current,
+            "total": self.total,
+            "current_title": self.current_title,
+            "output_path": self.output_path,
+            "book_title": self.book_title,
+            "error": self.error,
+        }
+
+    def update(
+        self,
+        *,
+        stage: str | None = None,
+        message: str | None = None,
+        current: int | None = None,
+        total: int | None = None,
+        current_title: str | None = None,
+    ) -> None:
+        if stage is not None:
+            self.stage = stage
+        if message is not None:
+            self.message = message
+        if current is not None:
+            self.current = current
+        if total is not None:
+            self.total = total
+        if current_title is not None:
+            self.current_title = current_title
+
+    def complete(self, output_path: Path, book_title: str) -> None:
+        self.status = "done"
+        self.stage = "done"
+        self.message = "EPUB gerado com sucesso."
+        self.current_title = ""
+        self.output_path = str(output_path)
+        self.book_title = book_title
+
+    def fail(self, error: str) -> None:
+        self.status = "error"
+        self.stage = "error"
+        self.message = "Falha ao gerar EPUB."
+        self.error = error
+        self.current_title = ""
+
+
+def _run_export_job(job: ExportJob, url: str, volume_index: int, output_dir: Path) -> None:
+    try:
+        client = HttpClient()
+        job.update(stage="scan", message="Buscando dados da obra...", current=0, total=0)
+        novel = _fetch_novel(url, client=client)
+        if not novel.volumes:
+            raise UiError("Nenhum volume encontrado nessa obra.")
+        if volume_index < 1 or volume_index > len(novel.volumes):
+            raise UiError(f"Volume invalido. Escolha de 1 a {len(novel.volumes)}.")
+
+        volume = novel.volumes[volume_index - 1]
+        chapters = []
+        job.book_title = f"{novel.title} - {volume.title}"
+        job.update(
+            stage="chapters",
+            message="Baixando capitulos...",
+            current=0,
+            total=len(volume.chapters),
+        )
+        for index, chapter in enumerate(volume.chapters, start=1):
+            job.update(current=index - 1, current_title=_short_progress_title(chapter.title))
+            chapter_html = client.get_html(chapter.url)
+            chapters.append(parse_chapter_page(chapter_html))
+            job.update(current=index)
+
+        cover = None
+        if novel.metadata.cover_url:
+            job.update(
+                stage="cover",
+                message="Baixando capa...",
+                current=len(chapters),
+                total=len(volume.chapters),
+                current_title="",
+            )
+            try:
+                cover_data, content_type = client.get_bytes(novel.metadata.cover_url)
+            except FetchError:
+                cover = None
+            else:
+                cover = cover_from_response(cover_data, content_type, novel.metadata.cover_url)
+
+        job.update(stage="epub", message="Montando EPUB...", current_title="")
+        output_path = output_dir / epub_file_name(novel, volume)
+        build_epub(novel, volume, chapters, output_path, cover)
+        job.complete(output_path, f"{novel.title} - {volume.title}")
+    except FetchError as exc:
+        job.fail(str(exc))
+    except UiError as exc:
+        job.fail(str(exc))
+    except Exception as exc:  # pragma: no cover - last-resort job boundary
+        job.fail(f"Erro inesperado: {exc}")
 
 
 class UiError(RuntimeError):
@@ -229,6 +349,19 @@ def _payload_output_dir(payload: dict[str, object]) -> Path:
     if not isinstance(output_dir, str):
         raise UiError("A pasta de saida precisa ser texto.")
     return Path(output_dir)
+
+
+def _payload_job_id(payload: dict[str, object]) -> str:
+    job_id = payload.get("job_id")
+    if not isinstance(job_id, str) or not job_id.strip():
+        raise UiError("Informe a exportacao para consultar.")
+    return job_id.strip()
+
+
+def _short_progress_title(title: str, limit: int = 56) -> str:
+    if len(title) <= limit:
+        return title
+    return f"{title[: limit - 1].rstrip()}..."
 
 
 def _is_centralnovel_url(url: str) -> bool:
@@ -516,6 +649,51 @@ INDEX_HTML = """<!doctype html>
 
     .message.error { color: var(--warn); }
 
+    .progress-panel {
+      display: grid;
+      gap: 9px;
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
+
+    .progress-panel[hidden] {
+      display: none;
+    }
+
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--ink);
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 10px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--soft);
+      border: 1px solid #c7ddda;
+    }
+
+    .progress-bar {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+      transition: width 0.18s ease;
+    }
+
+    .progress-detail {
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 0.88rem;
+      overflow-wrap: anywhere;
+    }
+
     @keyframes spin { to { transform: rotate(360deg); } }
 
     @media (max-width: 820px) {
@@ -570,6 +748,16 @@ INDEX_HTML = """<!doctype html>
           </div>
         </form>
         <p id="message" class="message"></p>
+        <div id="progressPanel" class="progress-panel" hidden>
+          <div class="progress-header">
+            <span id="progressLabel">Baixando capitulos</span>
+            <span id="progressCount">0%</span>
+          </div>
+          <div class="progress-track" aria-hidden="true">
+            <div id="progressBar" class="progress-bar"></div>
+          </div>
+          <div id="progressDetail" class="progress-detail"></div>
+        </div>
       </section>
 
       <section id="results">
@@ -588,8 +776,14 @@ INDEX_HTML = """<!doctype html>
     const statusNode = document.querySelector("#status");
     const messageNode = document.querySelector("#message");
     const resultsNode = document.querySelector("#results");
+    const progressPanel = document.querySelector("#progressPanel");
+    const progressLabel = document.querySelector("#progressLabel");
+    const progressCount = document.querySelector("#progressCount");
+    const progressBar = document.querySelector("#progressBar");
+    const progressDetail = document.querySelector("#progressDetail");
 
     let scannedUrl = "";
+    let progressTimer = null;
 
     scanButton.addEventListener("click", scanNovel);
     form.addEventListener("submit", exportVolume);
@@ -620,19 +814,53 @@ INDEX_HTML = """<!doctype html>
       if (!url || !volume) return setMessage("Analise a obra e escolha um volume.", true);
 
       setBusy(true, "Gerando EPUB...");
-      setMessage("Baixando capitulos e montando o arquivo.");
+      setMessage("Exportacao iniciada.");
+      resetProgress();
       try {
         const data = await request("/api/export", {
           url,
           volume,
           output_dir: outputDirInput.value.trim()
         });
-        setMessage(`${data.message} ${data.path}`);
+        await watchProgress(data.job_id);
       } catch (error) {
+        stopProgressTimer();
+        hideProgress();
         setMessage(error.message, true);
-      } finally {
         setBusy(false);
       }
+    }
+
+    async function watchProgress(jobId) {
+      const finished = await pollProgress(jobId);
+      if (!finished) {
+        progressTimer = window.setInterval(() => pollProgress(jobId), 650);
+      }
+    }
+
+    async function pollProgress(jobId) {
+      try {
+        const data = await request("/api/progress", { job_id: jobId });
+        renderProgress(data);
+        if (data.status === "done") {
+          stopProgressTimer();
+          setMessage(`${data.message} ${data.output_path}`);
+          setBusy(false);
+          return true;
+        }
+        if (data.status === "error") {
+          stopProgressTimer();
+          setMessage(data.error || data.message, true);
+          setBusy(false);
+          return true;
+        }
+      } catch (error) {
+        stopProgressTimer();
+        setMessage(error.message, true);
+        setBusy(false);
+        return true;
+      }
+      return false;
     }
 
     async function request(path, payload) {
@@ -699,6 +927,53 @@ INDEX_HTML = """<!doctype html>
       resultsNode.innerHTML = `
         <div class="empty-state">Cole um link da Central Novel para ver os volumes.</div>
       `;
+    }
+
+    function renderProgress(data) {
+      const percent = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
+      progressPanel.hidden = false;
+      progressLabel.textContent = progressTitle(data);
+      progressCount.textContent = data.total > 0
+        ? `${data.current}/${data.total} (${percent}%)`
+        : "";
+      progressBar.style.width = `${Math.max(0, Math.min(percent, 100))}%`;
+      progressDetail.textContent = data.current_title || data.message || "";
+      statusNode.textContent = data.message || "Gerando EPUB...";
+    }
+
+    function progressTitle(data) {
+      const labels = {
+        queued: "Preparando",
+        scan: "Analisando obra",
+        chapters: "Baixando capitulos",
+        cover: "Baixando capa",
+        epub: "Montando EPUB",
+        done: "Concluido",
+        error: "Erro"
+      };
+      return labels[data.stage] || data.message || "Gerando EPUB";
+    }
+
+    function resetProgress() {
+      stopProgressTimer();
+      progressPanel.hidden = false;
+      progressLabel.textContent = "Preparando";
+      progressCount.textContent = "";
+      progressBar.style.width = "0%";
+      progressDetail.textContent = "";
+    }
+
+    function hideProgress() {
+      progressPanel.hidden = true;
+      progressBar.style.width = "0%";
+      progressDetail.textContent = "";
+    }
+
+    function stopProgressTimer() {
+      if (progressTimer !== null) {
+        window.clearInterval(progressTimer);
+        progressTimer = null;
+      }
     }
 
     function setBusy(isBusy, label = "Pronto") {
