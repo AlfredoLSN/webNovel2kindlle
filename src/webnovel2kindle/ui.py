@@ -46,6 +46,7 @@ class UiHandler(BaseHTTPRequestHandler):
             "/api/scan": self._scan,
             "/api/export": self._export,
             "/api/progress": self._progress,
+            "/api/select-folder": self._select_folder,
         }
         handler = routes.get(urlparse(self.path).path)
         if handler is None:
@@ -123,6 +124,11 @@ class UiHandler(BaseHTTPRequestHandler):
             raise UiError("Exportacao nao encontrada.", HTTPStatus.NOT_FOUND)
 
         return job.snapshot()
+
+    def _select_folder(self, payload: dict[str, object]) -> dict[str, object]:
+        initial_dir = _payload_output_dir(payload).expanduser()
+        selected = _select_output_folder(initial_dir)
+        return {"path": str(selected) if selected else ""}
 
     def _app_server(self) -> WebNovelServer:
         if not isinstance(self.server, WebNovelServer):
@@ -364,6 +370,32 @@ def _short_progress_title(title: str, limit: int = 56) -> str:
     return f"{title[: limit - 1].rstrip()}..."
 
 
+def _select_output_folder(initial_dir: Path) -> Path | None:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError as exc:
+        raise UiError("Seletor de pastas indisponivel neste Python.") from exc
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        selected = filedialog.askdirectory(
+            initialdir=str(initial_dir if initial_dir.exists() else Path.home()),
+            mustexist=False,
+            title="Escolha a pasta para salvar o EPUB",
+        )
+    except tk.TclError as exc:
+        raise UiError("Nao consegui abrir o seletor de pastas neste ambiente.") from exc
+    finally:
+        root.destroy()
+
+    if not selected:
+        return None
+    return Path(selected)
+
+
 def _is_centralnovel_url(url: str) -> bool:
     hostname = urlparse(url).hostname or ""
     return hostname == "centralnovel.com" or hostname.endswith(".centralnovel.com")
@@ -518,6 +550,12 @@ INDEX_HTML = """<!doctype html>
       margin-top: 4px;
     }
 
+    .output-picker {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+    }
+
     button {
       height: 42px;
       border: 1px solid transparent;
@@ -539,6 +577,13 @@ INDEX_HTML = """<!doctype html>
       background: var(--soft);
       color: var(--accent-dark);
       border-color: #c7ddda;
+    }
+
+    button.ghost {
+      min-width: 92px;
+      background: #fff;
+      color: var(--accent-dark);
+      border-color: var(--line);
     }
 
     button:disabled {
@@ -705,6 +750,7 @@ INDEX_HTML = """<!doctype html>
 
     @media (max-width: 520px) {
       .actions { grid-template-columns: 1fr; }
+      .output-picker { grid-template-columns: 1fr; }
       .novel { grid-template-columns: 84px 1fr; }
       .cover { width: 84px; }
       .volume-row { grid-template-columns: 40px 1fr; }
@@ -740,7 +786,10 @@ INDEX_HTML = """<!doctype html>
           </label>
           <label>
             Pasta de saida
-            <input id="outputDir" name="outputDir" value="dist">
+            <span class="output-picker">
+              <input id="outputDir" name="outputDir" value="dist">
+              <button id="folderButton" class="ghost" type="button">Escolher</button>
+            </span>
           </label>
           <div class="actions">
             <button id="scanButton" class="secondary" type="button">Analisar</button>
@@ -771,6 +820,7 @@ INDEX_HTML = """<!doctype html>
     const urlInput = document.querySelector("#url");
     const volumeSelect = document.querySelector("#volume");
     const outputDirInput = document.querySelector("#outputDir");
+    const folderButton = document.querySelector("#folderButton");
     const scanButton = document.querySelector("#scanButton");
     const exportButton = document.querySelector("#exportButton");
     const statusNode = document.querySelector("#status");
@@ -786,6 +836,7 @@ INDEX_HTML = """<!doctype html>
     let progressTimer = null;
 
     scanButton.addEventListener("click", scanNovel);
+    folderButton.addEventListener("click", selectOutputFolder);
     form.addEventListener("submit", exportVolume);
 
     async function scanNovel() {
@@ -801,6 +852,24 @@ INDEX_HTML = """<!doctype html>
         setMessage(`${data.volumes.length} volume(s), ${data.chapter_count} capitulo(s).`);
       } catch (error) {
         renderEmpty();
+        setMessage(error.message, true);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    async function selectOutputFolder() {
+      setBusy(true, "Escolhendo pasta...");
+      setMessage("");
+      try {
+        const data = await request("/api/select-folder", {
+          output_dir: outputDirInput.value.trim()
+        });
+        if (data.path) {
+          outputDirInput.value = data.path;
+          setMessage(`Pasta selecionada: ${data.path}`);
+        }
+      } catch (error) {
         setMessage(error.message, true);
       } finally {
         setBusy(false);
@@ -980,6 +1049,7 @@ INDEX_HTML = """<!doctype html>
       statusNode.textContent = isBusy ? label : "Pronto";
       statusNode.classList.toggle("busy", isBusy);
       scanButton.disabled = isBusy;
+      folderButton.disabled = isBusy;
       exportButton.disabled = isBusy || volumeSelect.disabled;
     }
 
