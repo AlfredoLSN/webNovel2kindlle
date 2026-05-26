@@ -83,6 +83,23 @@ Depois disso, a CLI vai:
 4. baixar a capa, quando disponivel;
 5. gerar o EPUB na pasta `dist/`.
 
+## Interface Web
+
+Para usar uma interface no navegador, execute:
+
+```bash
+uv run webnovel2kindle-ui
+```
+
+A interface local abre em `http://127.0.0.1:8765` e permite colar o link da obra,
+analisar os volumes, escolher o volume desejado e gerar o EPUB.
+
+Se preferir abrir o navegador manualmente:
+
+```bash
+uv run webnovel2kindle-ui --no-browser
+```
+
 ## Uso Com URL
 
 Voce tambem pode passar a URL diretamente:

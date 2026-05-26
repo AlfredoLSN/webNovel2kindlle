@@ -20,6 +20,7 @@ dev = [
 
 [project.scripts]
 webnovel2kindle = "webnovel2kindle.cli:app"
+webnovel2kindle-ui = "webnovel2kindle.ui:main"
 
 [build-system]
 requires = ["hatchling"]
