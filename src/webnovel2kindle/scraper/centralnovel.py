@@ -81,34 +81,92 @@ def _extract_chapter_title(soup: BeautifulSoup) -> str:
 
 
 def _extract_eplister_volumes(soup: BeautifulSoup, page_url: str) -> list[Volume]:
+    structured_volumes = _extract_structured_eplister_volumes(soup, page_url)
+    if structured_volumes:
+        return structured_volumes
+
     volumes: dict[str, list[Chapter]] = {}
     seen_urls: set[str] = set()
 
     for chapter_list in soup.select(".eplister"):
-        for anchor in chapter_list.find_all("a", href=True):
-            href = anchor["href"]
-            if href.rstrip("/").endswith("/pdf"):
-                continue
-
-            title = _clean_text(anchor.get_text(" ", strip=True))
-            if not title or "{{" in title:
-                continue
-
-            url = urljoin(page_url, href)
-            if url in seen_urls:
-                continue
-
+        for title, url in _extract_eplister_chapter_links(chapter_list, page_url, seen_urls):
             volume_title = _volume_title(title)
             volumes.setdefault(volume_title, []).append(
                 Chapter(title=title, url=url, number=_chapter_number(title, url))
             )
-            seen_urls.add(url)
 
     parsed = [
         Volume(title=volume_title, chapters=tuple(_sort_chapters(chapters)))
         for volume_title, chapters in volumes.items()
     ]
     return sorted(parsed, key=_volume_sort_key)
+
+
+def _extract_structured_eplister_volumes(soup: BeautifulSoup, page_url: str) -> list[Volume]:
+    volumes: list[Volume] = []
+    seen_urls: set[str] = set()
+
+    for heading in soup.select(".ts-chl-collapsible"):
+        content = heading.find_next_sibling(
+            lambda sibling: isinstance(sibling, Tag)
+            and "ts-chl-collapsible-content" in sibling.get("class", [])
+        )
+        if not isinstance(content, Tag):
+            continue
+
+        chapters: list[Chapter] = []
+        for chapter_list in content.select(".eplister"):
+            for title, url in _extract_eplister_chapter_links(chapter_list, page_url, seen_urls):
+                chapters.append(
+                    Chapter(title=title, url=url, number=_chapter_number(title, url))
+                )
+
+        if chapters:
+            volumes.append(
+                Volume(
+                    title=_clean_text(heading.get_text(" ", strip=True)),
+                    chapters=tuple(_sort_chapters(chapters)),
+                )
+            )
+
+    return sorted(volumes, key=_volume_sort_key)
+
+
+def _extract_eplister_chapter_links(
+    chapter_list: Tag,
+    page_url: str,
+    seen_urls: set[str],
+) -> list[tuple[str, str]]:
+    chapters: list[tuple[str, str]] = []
+
+    for anchor in chapter_list.find_all("a", href=True):
+        href = anchor["href"]
+        if href.rstrip("/").endswith("/pdf"):
+            continue
+
+        title = _eplister_anchor_title(anchor)
+        if not title or "{{" in title:
+            continue
+
+        url = urljoin(page_url, href)
+        if url in seen_urls:
+            continue
+
+        chapters.append((title, url))
+        seen_urls.add(url)
+
+    return chapters
+
+
+def _eplister_anchor_title(anchor: Tag) -> str:
+    number_node = anchor.select_one(".epl-num")
+    title_node = anchor.select_one(".epl-title")
+    if number_node and title_node:
+        return _clean_text(
+            f"{number_node.get_text(' ', strip=True)} {title_node.get_text(' ', strip=True)}"
+        )
+
+    return _clean_text(anchor.get_text(" ", strip=True))
 
 
 def _extract_metadata(soup: BeautifulSoup, page_url: str) -> NovelMetadata:

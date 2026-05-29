@@ -153,6 +153,55 @@ def test_parse_novel_page_keeps_textual_eplister_volumes() -> None:
     ]
 
 
+def test_parse_novel_page_prefers_centralnovel_collapsible_volume_headings() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Lord of Mysteries</h1>
+        <span class="ts-chl-collapsible">Volume  Side Story 2</span>
+        <div class="ts-chl-collapsible-content">
+          <div class="eplister">
+            <ul>
+              <li>
+                <a href="https://centralnovel.com/lord-of-mysteries-capitulo-1430/">
+                  <div class="epl-num">Vol. Side Story 2 Cap. 1430</div>
+                  <div class="epl-title">Nos Dias Modernos (28)</div>
+                  <div class="epl-date">abril 24, 2024</div>
+                </a>
+              </li>
+            </ul>
+          </div>
+        </div>
+        <span class="ts-chl-collapsible">Volume  Bonus</span>
+        <div class="ts-chl-collapsible-content">
+          <div class="eplister">
+            <ul>
+              <li>
+                <a href="https://centralnovel.com/lord-of-mysteries-capitulo-1432/">
+                  <div class="epl-num">Vol. Bonus Cap. 1432 [Fim[</div>
+                  <div class="epl-title">Capítulo Bônus: Aquele Canto (2)</div>
+                  <div class="epl-date">abril 24, 2024</div>
+                </a>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    novel = parse_novel_page(html, "https://centralnovel.com/series/lord-of-mysteries-20240505/")
+
+    assert [volume.title for volume in novel.volumes] == [
+        "Volume Side Story 2",
+        "Volume Bonus",
+    ]
+    assert [chapter.title for volume in novel.volumes for chapter in volume.chapters] == [
+        "Vol. Side Story 2 Cap. 1430 Nos Dias Modernos (28)",
+        "Vol. Bonus Cap. 1432 [Fim[ Capítulo Bônus: Aquele Canto (2)",
+    ]
+
+
 def test_parse_chapter_page_extracts_clean_xhtml_paragraphs() -> None:
     html = """
     <html>
