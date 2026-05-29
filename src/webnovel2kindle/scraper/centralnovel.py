@@ -9,10 +9,11 @@ from webnovel2kindle.models import Chapter, ChapterContent, Novel, NovelMetadata
 
 CHAPTER_RE = re.compile(r"\b(?:chapter|capitulo|capítulo|cap\.?|ch\.?)\s*(\d+)\b", re.IGNORECASE)
 VOL_CAP_RE = re.compile(
-    r"\bvol\.?\s*(?P<volume>extra|\d+)\s+cap\.?\s*(?P<chapter>\d+)\b",
+    r"\bvol\.?\s*(?P<volume>.+?)\s+cap\.?\s*(?P<chapter>\d+)\b",
     re.IGNORECASE,
 )
 VOLUME_RE = re.compile(r"\b(?:volume|vol\.?|book|arc|season)\b", re.IGNORECASE)
+VOLUME_NUMBER_TITLE_RE = re.compile(r"^volume\s+(\d+)$", re.IGNORECASE)
 
 
 def parse_novel_page(html: str, page_url: str) -> Novel:
@@ -384,17 +385,28 @@ def _volume_title(value: str) -> str:
     if not match:
         return "Capitulos"
 
-    volume = match.group("volume")
-    return "Volume Extra" if volume.lower() == "extra" else f"Volume {int(volume)}"
+    volume = _clean_text(match.group("volume"))
+    if volume.casefold() == "extra":
+        return "Volume Extra"
+    if volume.isdigit():
+        return f"Volume {int(volume)}"
+    return f"Volume {volume}"
 
 
 def _volume_sort_key(volume: Volume) -> tuple[int, int]:
-    match = re.search(r"\d+", volume.title)
+    match = VOLUME_NUMBER_TITLE_RE.search(volume.title)
     if match:
-        return (1, int(match.group(0)))
+        return (1, int(match.group(1)))
     if "extra" in volume.title.lower():
         return (0, 0)
-    return (2, 0)
+    chapter_numbers = [
+        chapter.number
+        for chapter in volume.chapters
+        if chapter.number is not None
+    ]
+    if chapter_numbers:
+        return (2, min(chapter_numbers))
+    return (3, 0)
 
 
 def _clean_text(value: str) -> str:

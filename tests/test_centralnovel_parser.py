@@ -104,6 +104,55 @@ def test_parse_novel_page_uses_centralnovel_eplister_blocks() -> None:
     )
 
 
+def test_parse_novel_page_keeps_textual_eplister_volumes() -> None:
+    html = """
+    <html>
+      <body>
+        <h1>Lord of Mysteries</h1>
+        <div class="eplister">
+          <a href="https://centralnovel.com/lord-of-mysteries-capitulo-1432/">
+            <div class="epl-num">Vol. Bonus Cap. 1432 [Fim[</div>
+            <div class="epl-title">Capítulo Bônus: Aquele Canto (2)</div>
+          </a>
+        </div>
+        <div class="eplister">
+          <a href="https://centralnovel.com/lord-of-mysteries-capitulo-1430/">
+            <div class="epl-num">Vol. Side Story 2 Cap. 1430</div>
+            <div class="epl-title">Nos Dias Modernos (28)</div>
+          </a>
+        </div>
+        <div class="eplister">
+          <a href="https://centralnovel.com/lord-of-mysteries-capitulo-1394/">
+            <div class="epl-num">Vol. 8 Cap. 1394</div>
+            <div class="epl-title">Uma Nova Jornada</div>
+          </a>
+        </div>
+        <div class="eplister">
+          <a href="https://centralnovel.com/lord-of-mysteries-capitulo-1437/">
+            <div class="epl-num">Vol. Extra Cap. 1437</div>
+            <div class="epl-title">Sempre que Vejo a Lua Cheia</div>
+          </a>
+        </div>
+      </body>
+    </html>
+    """
+
+    novel = parse_novel_page(html, "https://centralnovel.com/series/lord-of-mysteries-20240505/")
+
+    assert [volume.title for volume in novel.volumes] == [
+        "Volume Extra",
+        "Volume 8",
+        "Volume Side Story 2",
+        "Volume Bonus",
+    ]
+    assert [chapter.number for volume in novel.volumes for chapter in volume.chapters] == [
+        1437,
+        1394,
+        1430,
+        1432,
+    ]
+
+
 def test_parse_chapter_page_extracts_clean_xhtml_paragraphs() -> None:
     html = """
     <html>
