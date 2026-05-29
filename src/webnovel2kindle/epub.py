@@ -11,10 +11,6 @@ from pathlib import Path
 
 from webnovel2kindle.models import ChapterContent, Novel, Volume
 
-GENERATOR_NAME = "webnovel2kindle"
-TOOL_LOGO_PATH = Path(__file__).resolve().parents[2] / "logo.png"
-TOOL_LOGO_HREF = "images/tool-logo.png"
-
 
 @dataclass(frozen=True)
 class CoverImage:
@@ -29,7 +25,6 @@ def build_epub(
     chapters: list[ChapterContent],
     output_path: Path,
     cover: CoverImage | None = None,
-    tool_logo_path: Path | None = TOOL_LOGO_PATH,
 ) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -37,7 +32,6 @@ def build_epub(
     modified = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     chapter_files = [f"chapters/chapter-{index:04d}.xhtml" for index in range(1, len(chapters) + 1)]
     cover_href = f"images/cover{cover.extension}" if cover else None
-    tool_logo = _read_tool_logo(tool_logo_path)
 
     with zipfile.ZipFile(output_path, "w") as epub:
         epub.writestr(
@@ -48,8 +42,6 @@ def build_epub(
         _write(epub, "META-INF/container.xml", _container_xml())
         _write(epub, "OEBPS/styles/book.css", _book_css())
         _write(epub, "OEBPS/title.xhtml", _title_page(novel, volume, cover_href))
-        _write(epub, "OEBPS/metadata.xhtml", _metadata_page(novel))
-        _write(epub, "OEBPS/signature.xhtml", _signature_page(has_logo=tool_logo is not None))
         _write(epub, "OEBPS/nav.xhtml", _nav_page(novel, volume, chapters, chapter_files))
         _write(epub, "OEBPS/toc.ncx", _toc_ncx(book_id, novel, volume, chapters, chapter_files))
         _write(
@@ -63,25 +55,16 @@ def build_epub(
                 chapters,
                 chapter_files,
                 cover,
-                has_tool_logo=tool_logo is not None,
             ),
         )
 
         if cover and cover_href:
             epub.writestr(f"OEBPS/{cover_href}", cover.data, compress_type=zipfile.ZIP_DEFLATED)
-        if tool_logo:
-            epub.writestr(f"OEBPS/{TOOL_LOGO_HREF}", tool_logo, compress_type=zipfile.ZIP_DEFLATED)
 
         for chapter, file_name in zip(chapters, chapter_files, strict=True):
             _write(epub, f"OEBPS/{file_name}", _chapter_page(chapter))
 
     return output_path
-
-
-def _read_tool_logo(tool_logo_path: Path | None) -> bytes | None:
-    if not tool_logo_path or not tool_logo_path.exists():
-        return None
-    return tool_logo_path.read_bytes()
 
 
 def cover_from_response(data: bytes, content_type: str | None, source_url: str) -> CoverImage:
@@ -124,14 +107,17 @@ def _content_opf(
     chapters: list[ChapterContent],
     chapter_files: list[str],
     cover: CoverImage | None,
-    has_tool_logo: bool,
 ) -> str:
     metadata = novel.metadata
     subject_tags = "\n".join(
         f"    <dc:subject>{escape(genre)}</dc:subject>" for genre in metadata.genres
     )
-    creator = escape(metadata.author or "Autor desconhecido")
-    description = escape(metadata.description or f"{novel.title} - {volume.title}")
+    creator = f"    <dc:creator>{escape(metadata.author)}</dc:creator>\n" if metadata.author else ""
+    description = (
+        f"    <dc:description>{escape(metadata.description)}</dc:description>\n"
+        if metadata.description
+        else ""
+    )
     cover_item = ""
     cover_meta = ""
     if cover:
@@ -140,11 +126,6 @@ def _content_opf(
             f'media-type="{cover.media_type}" properties="cover-image"/>\n'
         )
         cover_meta = '    <meta name="cover" content="cover-image"/>\n'
-    tool_logo_item = (
-        f'    <item id="tool-logo" href="{TOOL_LOGO_HREF}" media-type="image/png"/>\n'
-        if has_tool_logo
-        else ""
-    )
 
     chapter_items = "\n".join(
         f'    <item id="chapter-{index:04d}" href="{file_name}" '
@@ -161,31 +142,23 @@ def _content_opf(
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="book-id">{book_id}</dc:identifier>
     <dc:title>{escape(novel.title)} - {escape(volume.title)}</dc:title>
-    <dc:creator>{creator}</dc:creator>
-    <dc:language>pt-BR</dc:language>
-    <dc:publisher>{GENERATOR_NAME}</dc:publisher>
-    <dc:description>{description}</dc:description>
-{subject_tags}
+{creator}    <dc:language>pt-BR</dc:language>
+{description}{subject_tags}
     <meta property="dcterms:modified">{modified}</meta>
     <meta property="schema:accessMode">textual</meta>
     <meta property="schema:accessibilityFeature">tableOfContents</meta>
-    <meta name="generator" content="{GENERATOR_NAME}"/>
 {cover_meta}  </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
     <item id="css" href="styles/book.css" media-type="text/css"/>
     <item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>
-    <item id="metadata" href="metadata.xhtml" media-type="application/xhtml+xml"/>
-    <item id="signature" href="signature.xhtml" media-type="application/xhtml+xml"/>
-{cover_item}{tool_logo_item}{chapter_items}
+{cover_item}{chapter_items}
   </manifest>
   <spine toc="toc">
     <itemref idref="title"/>
-    <itemref idref="metadata"/>
     <itemref idref="nav"/>
 {chapter_spine}
-    <itemref idref="signature"/>
   </spine>
 </package>
 """
@@ -197,7 +170,11 @@ def _title_page(novel: Novel, volume: Volume, cover_href: str | None) -> str:
         if cover_href
         else ""
     )
-    author = novel.metadata.author or "Autor desconhecido"
+    author = (
+        f'<p class="byline">{escape(novel.metadata.author)}</p>'
+        if novel.metadata.author
+        else ""
+    )
     return _xhtml(
         f"{escape(novel.title)} - {escape(volume.title)}",
         f"""
@@ -205,57 +182,7 @@ def _title_page(novel: Novel, volume: Volume, cover_href: str | None) -> str:
           {cover}
           <h1>{escape(novel.title)}</h1>
           <p class="subtitle">{escape(volume.title)}</p>
-          <p class="byline">{escape(author)}</p>
-        </section>
-        """,
-    )
-
-
-def _metadata_page(novel: Novel) -> str:
-    metadata = novel.metadata
-    rows = [
-        ("Autor", metadata.author),
-        ("Status", metadata.status),
-        ("Tipo", metadata.novel_type),
-        ("Lançamento", metadata.release_year),
-        ("Postado em", metadata.posted_at),
-        ("Atualizado em", metadata.updated_at),
-        ("Fonte", novel.url),
-    ]
-    table_rows = "\n".join(
-        f"<tr><th>{escape(label)}</th><td>{escape(value)}</td></tr>"
-        for label, value in rows
-        if value
-    )
-    genres = ", ".join(metadata.genres)
-    genre_block = f"<p><strong>Generos:</strong> {escape(genres)}</p>" if genres else ""
-    description = f"<p>{escape(metadata.description)}</p>" if metadata.description else ""
-    return _xhtml(
-        "Metadados",
-        f"""
-        <section>
-          <h1>Sobre esta edição</h1>
-          <table>{table_rows}</table>
-          {genre_block}
-          <h2>Sinopse</h2>
-          {description}
-        </section>
-        """,
-    )
-
-
-def _signature_page(has_logo: bool) -> str:
-    logo = (
-        f'<img class="tool-logo" src="{TOOL_LOGO_HREF}" alt="{GENERATOR_NAME}"/>'
-        if has_logo
-        else ""
-    )
-    return _xhtml(
-        "Assinatura",
-        f"""
-        <section class="signature">
-          {logo}
-          <p>Gerado com {GENERATOR_NAME}.</p>
+          {author}
         </section>
         """,
     )
@@ -289,12 +216,8 @@ def _nav_page(
         f"""
         <nav class="book-toc" epub:type="toc" id="toc">
           <h1>Sumário</h1>
-          <p>{escape(novel.title)} - {escape(volume.title)}</p>
           <ol class="toc-list">
-            <li><a href="title.xhtml">Capa</a></li>
-            <li><a href="metadata.xhtml">Sobre esta edição</a></li>
             {chapter_items}
-            <li><a href="signature.xhtml">Assinatura da edição</a></li>
           </ol>
         </nav>
         """,
@@ -310,7 +233,7 @@ def _toc_ncx(
 ) -> str:
     nav_points = "\n".join(
         f"""
-    <navPoint id="chapter-{index:04d}" playOrder="{index + 2}">
+    <navPoint id="chapter-{index:04d}" playOrder="{index + 1}">
       <navLabel><text>{escape(chapter.title)}</text></navLabel>
       <content src="{file_name}"/>
     </navPoint>"""
@@ -332,10 +255,6 @@ def _toc_ncx(
     <navPoint id="title" playOrder="1">
       <navLabel><text>Capa</text></navLabel>
       <content src="title.xhtml"/>
-    </navPoint>
-    <navPoint id="metadata" playOrder="2">
-      <navLabel><text>Sobre esta edição</text></navLabel>
-      <content src="metadata.xhtml"/>
     </navPoint>
 {nav_points}
   </navMap>
@@ -377,19 +296,6 @@ p {
   text-indent: 1.2em;
 }
 
-table {
-  border-collapse: collapse;
-  margin: 1.5em 0;
-  width: 100%;
-}
-
-th, td {
-  border-bottom: 1px solid #d8d8d8;
-  padding: 0.35em 0;
-  text-align: left;
-  vertical-align: top;
-}
-
 .title-page {
   text-align: center;
 }
@@ -412,11 +318,6 @@ th, td {
   text-align: center;
 }
 
-.book-toc p {
-  text-align: left;
-  text-indent: 0;
-}
-
 .toc-list {
   line-height: 1.4;
   margin: 1.5em 0 0;
@@ -429,25 +330,6 @@ th, td {
 
 .toc-list a {
   text-decoration: none;
-}
-
-.signature {
-  border-top: 1px solid #d8d8d8;
-  margin-top: 4em;
-  padding-top: 2em;
-  text-align: center;
-}
-
-.signature p {
-  text-align: center;
-  text-indent: 0;
-}
-
-.tool-logo {
-  display: block;
-  margin: 0 auto 1em;
-  max-height: 96px;
-  max-width: 240px;
 }
 """
 

@@ -4,7 +4,7 @@
 
 `webnovel2kindle` e uma CLI para mapear obras da [Central Novel](https://centralnovel.com/), selecionar um volume e gerar um EPUB bem estruturado para leitura em e-readers, apps de EPUB e fluxo Kindle.
 
-A ferramenta identifica volumes e capitulos, coleta metadados da obra, baixa a capa, monta um sumario clicavel e adiciona uma assinatura discreta com a logo da ferramenta no final do EPUB.
+A ferramenta identifica volumes e capitulos, coleta metadados da obra, baixa a capa e monta um sumario clicavel em um EPUB limpo para leitura.
 
 > Status do projeto: experimental, especifico para Central Novel.
 
@@ -17,10 +17,8 @@ A ferramenta identifica volumes e capitulos, coleta metadados da obra, baixa a c
 - Download dos capitulos com barra de progresso.
 - Geracao de EPUB por volume.
 - Capa da obra no EPUB.
-- Pagina de metadados com autor, status, tipo, lancamento, datas, generos, sinopse e fonte.
 - Sumario visivel no inicio do livro com links clicaveis para os capitulos.
 - Indices EPUB 3 (`nav.xhtml`) e NCX (`toc.ncx`) para compatibilidade.
-- Assinatura discreta com a logo da ferramenta.
 
 ## Requisitos
 
@@ -201,21 +199,11 @@ EPUB gerado: dist/shadow-slave-volume-1.epub
 Cada EPUB gerado contem:
 
 - pagina de capa;
-- pagina "Sobre esta edicao";
 - sumario visivel e clicavel;
 - capitulos do volume selecionado;
-- assinatura discreta da ferramenta;
-- metadados no `content.opf`;
+- metadados tecnicos no `content.opf`;
 - indice EPUB 3;
 - indice NCX para leitores mais antigos.
-
-A logo usada na assinatura vem do arquivo:
-
-```text
-logo.png
-```
-
-Se voce trocar essa imagem, os proximos EPUBs gerados usarao a nova logo.
 
 ## Desenvolvimento
 
